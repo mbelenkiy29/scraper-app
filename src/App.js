@@ -22,6 +22,8 @@ function App() {
   // Toggle proxy usage
   const toggleProxy = () => {
     setUseProxy(!useProxy);
+    // Clear any existing errors when toggling proxy
+    setError(null);
   };
 
   // Update fetch options
@@ -59,7 +61,15 @@ function App() {
 
     try {
       // If proxy is enabled, use a CORS proxy
-      const targetUrl = useProxy ? `https://cors-anywhere.herokuapp.com/${url}` : url;
+      // Using multiple proxy options as fallbacks
+      const proxyUrls = [
+        `https://corsproxy.io/?${encodeURIComponent(url)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+        `https://cors-anywhere.herokuapp.com/${url}`
+      ];
+      
+      const targetUrl = useProxy ? proxyUrls[0] : url;
+      console.log("Fetching from:", targetUrl);
       
       // Attempt to fetch with current options
       let response = await fetch(targetUrl, fetchOptions);
@@ -98,7 +108,96 @@ function App() {
       setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
       setIsLoading(false);
     } catch (err) {
-      setError(`Failed to fetch data: ${err.message}. Try enabling CORS proxy or checking the URL.`);
+      // Try with alternative proxies if the first one fails and proxy is enabled
+      if (useProxy && err.message.includes('CORS') || err.message.includes('Failed to fetch')) {
+        try {
+          // Try with second proxy
+          const secondProxyUrl = proxyUrls[1];
+          console.log("Trying secondary proxy:", secondProxyUrl);
+          response = await fetch(secondProxyUrl, fetchOptions);
+          
+          if (!response.ok) {
+            throw new Error(`HTTP error with second proxy! Status: ${response.status}`);
+          }
+          
+          // Process response as before
+          const contentType = response.headers.get('content-type');
+          
+          if (contentType && contentType.includes('application/json')) {
+            jsonData = await response.json();
+          } else {
+            // If not JSON, try to get text and parse
+            const text = await response.text();
+            try {
+              jsonData = JSON.parse(text);
+            } catch (e) {
+              // If text can't be parsed as JSON, try to extract data from HTML
+              const parser = new DOMParser();
+              const doc = parser.parseFromString(text, 'text/html');
+              
+              // Extract data from tables if present
+              const tables = doc.querySelectorAll('table');
+              if (tables.length > 0) {
+                jsonData = extractDataFromTables(tables);
+              } else {
+                throw new Error('Response is not in JSON format and no tables found');
+              }
+            }
+          }
+          
+          setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
+          setIsLoading(false);
+          return;
+        } catch (secondErr) {
+          // If second proxy also fails, try the third one
+          try {
+            const thirdProxyUrl = proxyUrls[2];
+            console.log("Trying tertiary proxy:", thirdProxyUrl);
+            response = await fetch(thirdProxyUrl, fetchOptions);
+            
+            if (!response.ok) {
+              throw new Error(`HTTP error with third proxy! Status: ${response.status}`);
+            }
+            
+            // Process response as before
+            const contentType = response.headers.get('content-type');
+            
+            if (contentType && contentType.includes('application/json')) {
+              jsonData = await response.json();
+            } else {
+              // If not JSON, try to get text and parse
+              const text = await response.text();
+              try {
+                jsonData = JSON.parse(text);
+              } catch (e) {
+                // If text can't be parsed as JSON, try to extract data from HTML
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(text, 'text/html');
+                
+                // Extract data from tables if present
+                const tables = doc.querySelectorAll('table');
+                if (tables.length > 0) {
+                  jsonData = extractDataFromTables(tables);
+                } else {
+                  throw new Error('Response is not in JSON format and no tables found');
+                }
+              }
+            }
+            
+            setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
+            setIsLoading(false);
+            return;
+          } catch (thirdErr) {
+            // All proxies failed
+            setError(`Failed to fetch data even with all CORS proxies. Please check if the URL is accessible: ${err.message}`);
+            setIsLoading(false);
+            return;
+          }
+        }
+      }
+      
+      // Original error if proxies not used or all failed
+      setError(`Failed to fetch data: ${err.message}. ${!useProxy ? 'Try enabling CORS proxy in Advanced Options' : 'All CORS proxies failed. Try a different URL.'}`);
       setIsLoading(false);
     }
   };
@@ -176,18 +275,50 @@ function App() {
     
     reader.onload = (event) => {
       try {
-        const jsonData = JSON.parse(event.target.result);
-        setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
-        setError(null);
-      } catch (err) {
-        // Try to parse CSV if JSON fails
+        // First attempt to parse as JSON
+        try {
+          const jsonData = JSON.parse(event.target.result);
+          setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
+          setError(null);
+          return;
+        } catch (jsonErr) {
+          // JSON parsing failed, continue to other formats
+        }
+        
+        // Try to parse as CSV
         try {
           const csvData = parseCSV(event.target.result);
-          setData(csvData);
-          setError(null);
+          if (csvData.length > 0) {
+            setData(csvData);
+            setError(null);
+            return;
+          }
         } catch (csvErr) {
-          setError('Invalid file format. Please upload a valid JSON or CSV file.');
+          // CSV parsing failed, continue to other formats
         }
+        
+        // Try to parse as HTML with tables
+        try {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(event.target.result, 'text/html');
+          const tables = doc.querySelectorAll('table');
+          
+          if (tables.length > 0) {
+            const tableData = extractDataFromTables(tables);
+            if (tableData.length > 0) {
+              setData(tableData);
+              setError(null);
+              return;
+            }
+          }
+        } catch (htmlErr) {
+          // HTML parsing failed
+        }
+        
+        // If we got here, no parser worked
+        setError('Could not parse file. Please upload a valid JSON, CSV, or HTML file with tables.');
+      } catch (err) {
+        setError(`Error processing file: ${err.message}`);
       }
     };
     
@@ -349,21 +480,35 @@ function App() {
                 
                 {/* Advanced options toggle */}
                 <div className="mt-3">
-                  <details className="text-sm">
+                  <div className="p-3 bg-yellow-50 border-l-4 border-yellow-400 rounded-md mb-3">
+                    <div className="flex">
+                      <div className="flex-shrink-0">
+                        <svg className="h-5 w-5 text-yellow-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                      </div>
+                      <div className="ml-3">
+                        <p className="text-sm text-yellow-700">
+                          <strong>CORS Issue Detected!</strong> Enable the CORS proxy below to fix "Failed to fetch" errors.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <details className="text-sm" open>
                     <summary className="cursor-pointer text-blue-600 hover:text-blue-800 font-medium">
-                      Advanced Options
+                      Advanced Options (CORS Solution Inside)
                     </summary>
                     <div className="mt-3 p-3 bg-gray-50 rounded-lg space-y-3">
-                      <div className="flex items-center">
+                      <div className="flex items-center bg-blue-50 p-2 rounded-md">
                         <input
                           type="checkbox"
                           id="use-proxy"
                           checked={useProxy}
                           onChange={toggleProxy}
-                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                          className="h-5 w-5 text-blue-600 focus:ring-blue-500 border-blue-300 rounded"
                         />
-                        <label htmlFor="use-proxy" className="ml-2 block text-sm text-gray-700">
-                          Use CORS Proxy (for cross-origin issues)
+                        <label htmlFor="use-proxy" className="ml-2 block text-sm font-medium text-blue-700">
+                          Use CORS Proxy (Enable this to fix fetch errors!)
                         </label>
                       </div>
                       
@@ -441,7 +586,7 @@ function App() {
                       Click to upload
                     </span> or drag and drop
                   </p>
-                  <p className="mt-1 text-xs text-gray-500">JSON or CSV files (Max 10MB)</p>
+                  <p className="mt-1 text-xs text-gray-500">JSON, CSV, HTML, or TXT files (Max 10MB)</p>
                   {localFile && (
                     <div className="mt-3 text-sm text-gray-800 bg-blue-50 p-2 rounded flex items-center justify-center">
                       <svg className="w-4 h-4 mr-1 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -456,7 +601,7 @@ function App() {
                     type="file"
                     className="sr-only"
                     onChange={handleFileInput}
-                    accept=".json,.csv"
+                    accept=".json,.csv,.html,.htm,.txt,.xml"
                   />
                 </div>
               </div>
