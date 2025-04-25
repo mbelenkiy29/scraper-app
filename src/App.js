@@ -14,6 +14,13 @@ function App() {
   });
   const [useProxy, setUseProxy] = useState(false);
 
+  // Define proxy URLs
+  const proxyUrls = [
+    `https://corsproxy.io/?`,
+    `https://api.allorigins.win/raw?url=`,
+    `https://cors-anywhere.herokuapp.com/`
+  ];
+
   // Handle URL input change
   const handleUrlChange = (e) => {
     setUrl(e.target.value);
@@ -37,168 +44,9 @@ function App() {
   // Validate URL
   const isValidUrl = (urlString) => {
     try {
-      new URL(urlString);
-      return true;
+      return Boolean(new URL(urlString));
     } catch (e) {
       return false;
-    }
-  };
-
-  // Fetch data from the provided URL
-  const fetchData = async () => {
-    if (!url) {
-      setError('Please enter a URL');
-      return;
-    }
-
-    if (!isValidUrl(url)) {
-      setError('Please enter a valid URL (e.g., https://api.example.com/data)');
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      // If proxy is enabled, use a CORS proxy
-      // Using multiple proxy options as fallbacks
-      const proxyUrls = [
-        `https://corsproxy.io/?${encodeURIComponent(url)}`,
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-        `https://cors-anywhere.herokuapp.com/${url}`
-      ];
-      
-      const targetUrl = useProxy ? proxyUrls[0] : url;
-      console.log("Fetching from:", targetUrl);
-      
-      // Attempt to fetch with current options
-      let response = await fetch(targetUrl, fetchOptions);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
-      
-      // Try to parse as JSON
-      let jsonData;
-      const contentType = response.headers.get('content-type');
-      
-      if (contentType && contentType.includes('application/json')) {
-        jsonData = await response.json();
-      } else {
-        // If not JSON, try to get text and parse
-        const text = await response.text();
-        try {
-          jsonData = JSON.parse(text);
-        } catch (e) {
-          // If text can't be parsed as JSON, try to extract data from HTML
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(text, 'text/html');
-          
-          // Extract data from tables if present
-          const tables = doc.querySelectorAll('table');
-          if (tables.length > 0) {
-            jsonData = extractDataFromTables(tables);
-          } else {
-            throw new Error('Response is not in JSON format and no tables found');
-          }
-        }
-      }
-      
-      // Set the data
-      setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
-      setIsLoading(false);
-    } catch (err) {
-      // Try with alternative proxies if the first one fails and proxy is enabled
-      if (useProxy && err.message.includes('CORS') || err.message.includes('Failed to fetch')) {
-        try {
-          // Try with second proxy
-          const secondProxyUrl = proxyUrls[1];
-          console.log("Trying secondary proxy:", secondProxyUrl);
-          response = await fetch(secondProxyUrl, fetchOptions);
-          
-          if (!response.ok) {
-            throw new Error(`HTTP error with second proxy! Status: ${response.status}`);
-          }
-          
-          // Process response as before
-          const contentType = response.headers.get('content-type');
-          
-          if (contentType && contentType.includes('application/json')) {
-            jsonData = await response.json();
-          } else {
-            // If not JSON, try to get text and parse
-            const text = await response.text();
-            try {
-              jsonData = JSON.parse(text);
-            } catch (e) {
-              // If text can't be parsed as JSON, try to extract data from HTML
-              const parser = new DOMParser();
-              const doc = parser.parseFromString(text, 'text/html');
-              
-              // Extract data from tables if present
-              const tables = doc.querySelectorAll('table');
-              if (tables.length > 0) {
-                jsonData = extractDataFromTables(tables);
-              } else {
-                throw new Error('Response is not in JSON format and no tables found');
-              }
-            }
-          }
-          
-          setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
-          setIsLoading(false);
-          return;
-        } catch (secondErr) {
-          // If second proxy also fails, try the third one
-          try {
-            const thirdProxyUrl = proxyUrls[2];
-            console.log("Trying tertiary proxy:", thirdProxyUrl);
-            response = await fetch(thirdProxyUrl, fetchOptions);
-            
-            if (!response.ok) {
-              throw new Error(`HTTP error with third proxy! Status: ${response.status}`);
-            }
-            
-            // Process response as before
-            const contentType = response.headers.get('content-type');
-            
-            if (contentType && contentType.includes('application/json')) {
-              jsonData = await response.json();
-            } else {
-              // If not JSON, try to get text and parse
-              const text = await response.text();
-              try {
-                jsonData = JSON.parse(text);
-              } catch (e) {
-                // If text can't be parsed as JSON, try to extract data from HTML
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(text, 'text/html');
-                
-                // Extract data from tables if present
-                const tables = doc.querySelectorAll('table');
-                if (tables.length > 0) {
-                  jsonData = extractDataFromTables(tables);
-                } else {
-                  throw new Error('Response is not in JSON format and no tables found');
-                }
-              }
-            }
-            
-            setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
-            setIsLoading(false);
-            return;
-          } catch (thirdErr) {
-            // All proxies failed
-            setError(`Failed to fetch data even with all CORS proxies. Please check if the URL is accessible: ${err.message}`);
-            setIsLoading(false);
-            return;
-          }
-        }
-      }
-      
-      // Original error if proxies not used or all failed
-      setError(`Failed to fetch data: ${err.message}. ${!useProxy ? 'Try enabling CORS proxy in Advanced Options' : 'All CORS proxies failed. Try a different URL.'}`);
-      setIsLoading(false);
     }
   };
 
@@ -206,15 +54,19 @@ function App() {
   const extractDataFromTables = (tables) => {
     const result = [];
     
+    if (tables.length === 0) return result;
+    
     // Process the first table
     const table = tables[0];
     const headers = Array.from(table.querySelectorAll('th')).map(th => th.textContent.trim());
     
     // If no headers found, try first row
-    const headerRow = headers.length === 0 ? Array.from(table.querySelectorAll('tr')[0].querySelectorAll('td')).map(td => td.textContent.trim()) : headers;
+    const headerRow = headers.length === 0 ? 
+      Array.from(table.querySelectorAll('tr')[0]?.querySelectorAll('td') || []).map(td => td.textContent.trim()) : 
+      headers;
     
     // Process rows
-    const rows = Array.from(table.querySelectorAll('tr')).slice(headers.length === 0 ? 1 : 0);
+    const rows = Array.from(table.querySelectorAll('tr')).slice(headers.length === 0 && headerRow.length > 0 ? 1 : 0);
     
     rows.forEach(row => {
       const cells = Array.from(row.querySelectorAll('td'));
@@ -230,6 +82,97 @@ function App() {
     });
     
     return result;
+  };
+
+  // Fetch data from the provided URL with fallback mechanism
+  const fetchData = async () => {
+    if (!url) {
+      setError('Please enter a URL');
+      return;
+    }
+
+    if (!isValidUrl(url)) {
+      setError('Please enter a valid URL (e.g., https://api.example.com/data)');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    const fetchWithUrl = async (fetchUrl, options) => {
+      try {
+        const response = await fetch(fetchUrl, options);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        
+        // Try to parse as JSON
+        const contentType = response.headers.get('content-type');
+        
+        if (contentType && contentType.includes('application/json')) {
+          return await response.json();
+        } else {
+          // If not JSON, try to get text and parse
+          const text = await response.text();
+          try {
+            return JSON.parse(text);
+          } catch (e) {
+            // If text can't be parsed as JSON, try to extract data from HTML
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(text, 'text/html');
+            
+            // Extract data from tables if present
+            const tables = doc.querySelectorAll('table');
+            if (tables.length > 0) {
+              return extractDataFromTables(tables);
+            } else {
+              throw new Error('Response is not in JSON format and no tables found');
+            }
+          }
+        }
+      } catch (error) {
+        throw error;
+      }
+    };
+
+    // Try all available options
+    let lastError = null;
+    
+    // First try direct URL
+    if (!useProxy) {
+      try {
+        const jsonData = await fetchWithUrl(url, fetchOptions);
+        setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
+        setIsLoading(false);
+        return;
+      } catch (err) {
+        lastError = err;
+        console.error("Direct fetch failed:", err.message);
+      }
+    }
+    
+    // If direct fetch fails or proxy is enabled, try with proxies
+    if (useProxy || lastError) {
+      for (const proxyUrl of proxyUrls) {
+        try {
+          const targetUrl = `${proxyUrl}${encodeURIComponent(url)}`;
+          console.log("Trying proxy:", targetUrl);
+          
+          const jsonData = await fetchWithUrl(targetUrl, fetchOptions);
+          setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
+          setIsLoading(false);
+          return;
+        } catch (err) {
+          lastError = err;
+          console.error(`Proxy fetch with ${proxyUrl} failed:`, err.message);
+        }
+      }
+    }
+    
+    // If we get here, all attempts failed
+    setError(`Failed to fetch data: ${lastError?.message || 'Unknown error'}. ${!useProxy ? 'Try enabling CORS proxy in Advanced Options' : 'All CORS proxies failed. Try a different URL.'}`);
+    setIsLoading(false);
   };
 
   // Handle drag events
@@ -269,69 +212,11 @@ function App() {
     }
   };
 
-  // Read local file content
-  const readLocalFile = (file) => {
-    const reader = new FileReader();
-    
-    reader.onload = (event) => {
-      try {
-        // First attempt to parse as JSON
-        try {
-          const jsonData = JSON.parse(event.target.result);
-          setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
-          setError(null);
-          return;
-        } catch (jsonErr) {
-          // JSON parsing failed, continue to other formats
-        }
-        
-        // Try to parse as CSV
-        try {
-          const csvData = parseCSV(event.target.result);
-          if (csvData.length > 0) {
-            setData(csvData);
-            setError(null);
-            return;
-          }
-        } catch (csvErr) {
-          // CSV parsing failed, continue to other formats
-        }
-        
-        // Try to parse as HTML with tables
-        try {
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(event.target.result, 'text/html');
-          const tables = doc.querySelectorAll('table');
-          
-          if (tables.length > 0) {
-            const tableData = extractDataFromTables(tables);
-            if (tableData.length > 0) {
-              setData(tableData);
-              setError(null);
-              return;
-            }
-          }
-        } catch (htmlErr) {
-          // HTML parsing failed
-        }
-        
-        // If we got here, no parser worked
-        setError('Could not parse file. Please upload a valid JSON, CSV, or HTML file with tables.');
-      } catch (err) {
-        setError(`Error processing file: ${err.message}`);
-      }
-    };
-    
-    reader.onerror = () => {
-      setError('Error reading file');
-    };
-    
-    reader.readAsText(file);
-  };
-
   // Parse CSV string to JSON
   const parseCSV = (csvString) => {
     const lines = csvString.split('\n');
+    if (lines.length === 0) return [];
+    
     const result = [];
     const headers = lines[0].split(',').map(header => header.trim().replace(/^"|"$/g, ''));
     
@@ -351,9 +236,74 @@ function App() {
     return result;
   };
 
+  // Read local file content
+  const readLocalFile = (file) => {
+    const reader = new FileReader();
+    
+    reader.onload = (event) => {
+      try {
+        let fileData = event.target.result;
+        
+        // First attempt to parse as JSON
+        try {
+          const jsonData = JSON.parse(fileData);
+          setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
+          setError(null);
+          return;
+        } catch (jsonErr) {
+          // JSON parsing failed, continue to other formats
+          console.log("JSON parsing failed, trying other formats");
+        }
+        
+        // Try to parse as CSV
+        try {
+          const csvData = parseCSV(fileData);
+          if (csvData.length > 0) {
+            setData(csvData);
+            setError(null);
+            return;
+          }
+        } catch (csvErr) {
+          // CSV parsing failed, continue to other formats
+          console.log("CSV parsing failed, trying other formats");
+        }
+        
+        // Try to parse as HTML with tables
+        try {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(fileData, 'text/html');
+          const tables = doc.querySelectorAll('table');
+          
+          if (tables.length > 0) {
+            const tableData = extractDataFromTables(tables);
+            if (tableData.length > 0) {
+              setData(tableData);
+              setError(null);
+              return;
+            }
+          }
+        } catch (htmlErr) {
+          // HTML parsing failed
+          console.log("HTML parsing failed");
+        }
+        
+        // If we got here, no parser worked
+        setError('Could not parse file. Please upload a valid JSON, CSV, or HTML file with tables.');
+      } catch (err) {
+        setError(`Error processing file: ${err.message}`);
+      }
+    };
+    
+    reader.onerror = () => {
+      setError('Error reading file');
+    };
+    
+    reader.readAsText(file);
+  };
+
   // Convert data to CSV
   const convertToCSV = (data) => {
-    if (data.length === 0) return '';
+    if (!data || data.length === 0) return '';
     
     // Get headers from the first object
     const headers = Object.keys(data[0]);
@@ -368,7 +318,7 @@ function App() {
         // Handle values that contain commas, newlines, or quotes
         const escaped = typeof value === 'string' ? 
           `"${value.replace(/"/g, '""')}"` : 
-          value;
+          value !== null && value !== undefined ? String(value) : '';
         return escaped;
       });
       csvRows.push(values.join(','));
@@ -379,7 +329,7 @@ function App() {
 
   // Export data to CSV
   const exportToCSV = () => {
-    if (data.length === 0) {
+    if (!data || data.length === 0) {
       setError('No data to export');
       return;
     }
@@ -441,35 +391,33 @@ function App() {
                   <div className="flex-grow relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                       <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path>
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9"></path>
                       </svg>
                     </div>
                     <input
                       type="text"
+                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                      placeholder="Enter API URL, e.g., https://api.example.com/data"
                       value={url}
                       onChange={handleUrlChange}
-                      placeholder="Enter API endpoint URL (e.g., https://api.example.com/data)"
-                      className="pl-10 w-full rounded-lg border border-gray-300 bg-gray-50 py-3 px-4 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent shadow-sm transition-all duration-150"
                     />
                   </div>
-                  <button 
-                    onClick={fetchData} 
-                    disabled={isLoading} 
-                    className={`py-3 px-6 md:w-auto rounded-lg text-white font-medium text-center shadow-md transition-all duration-150 transform hover:scale-105 active:scale-100 flex items-center justify-center ${
-                      isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
-                    }`}
+                  <button
+                    onClick={fetchData}
+                    disabled={isLoading}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isLoading ? (
                       <>
-                        <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        Loading...
+                        Fetching...
                       </>
                     ) : (
                       <>
-                        <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
                         </svg>
                         Fetch Data
@@ -477,248 +425,131 @@ function App() {
                     )}
                   </button>
                 </div>
-                
-                {/* Advanced options toggle */}
-                <div className="mt-3">
-                  <div className="p-3 bg-yellow-50 border-l-4 border-yellow-400 rounded-md mb-3">
-                    <div className="flex">
-                      <div className="flex-shrink-0">
-                        <svg className="h-5 w-5 text-yellow-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                        </svg>
-                      </div>
-                      <div className="ml-3">
-                        <p className="text-sm text-yellow-700">
-                          <strong>CORS Issue Detected!</strong> Enable the CORS proxy below to fix "Failed to fetch" errors.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  <details className="text-sm" open>
-                    <summary className="cursor-pointer text-blue-600 hover:text-blue-800 font-medium">
-                      Advanced Options (CORS Solution Inside)
-                    </summary>
-                    <div className="mt-3 p-3 bg-gray-50 rounded-lg space-y-3">
-                      <div className="flex items-center bg-blue-50 p-2 rounded-md">
-                        <input
-                          type="checkbox"
-                          id="use-proxy"
-                          checked={useProxy}
-                          onChange={toggleProxy}
-                          className="h-5 w-5 text-blue-600 focus:ring-blue-500 border-blue-300 rounded"
-                        />
-                        <label htmlFor="use-proxy" className="ml-2 block text-sm font-medium text-blue-700">
-                          Use CORS Proxy (Enable this to fix fetch errors!)
-                        </label>
-                      </div>
-                      
-                      <div>
-                        <label className="block text-sm text-gray-700 mb-1">
-                          Request Method
-                        </label>
-                        <select
-                          value={fetchOptions.method}
-                          onChange={(e) => updateFetchOption('method', e.target.value)}
-                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm bg-white py-2 px-3"
-                        >
-                          <option value="GET">GET</option>
-                          <option value="POST">POST</option>
-                          <option value="PUT">PUT</option>
-                          <option value="DELETE">DELETE</option>
-                        </select>
-                      </div>
-                      
-                      <div>
-                        <label className="block text-sm text-gray-700 mb-1">
-                          Content-Type Header
-                        </label>
-                        <select
-                          value={fetchOptions.headers['Content-Type']}
-                          onChange={(e) => updateFetchOption('headers', {...fetchOptions.headers, 'Content-Type': e.target.value})}
-                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm bg-white py-2 px-3"
-                        >
-                          <option value="application/json">application/json</option>
-                          <option value="text/html">text/html</option>
-                          <option value="text/plain">text/plain</option>
-                          <option value="application/xml">application/xml</option>
-                        </select>
-                      </div>
-                    </div>
-                  </details>
+                <div className="mt-2 flex items-center">
+                  <input
+                    type="checkbox"
+                    id="proxy-toggle"
+                    checked={useProxy}
+                    onChange={toggleProxy}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                  />
+                  <label htmlFor="proxy-toggle" className="ml-2 block text-sm text-gray-700">
+                    Use CORS proxy (for APIs that don't support cross-origin requests)
+                  </label>
                 </div>
               </div>
               
-              {/* Divider */}
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-200"></div>
-                </div>
-                <div className="relative flex justify-center">
-                  <span className="bg-white px-4 text-sm text-gray-500 font-medium">OR</span>
-                </div>
-              </div>
-              
-              {/* File Upload Section */}
-              <div>
+              {/* Local File Upload Section */}
+              <div className="mt-6">
                 <h3 className="text-base md:text-lg font-semibold text-gray-800 mb-2 md:mb-3 flex items-center">
                   <svg className="w-5 h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
                   </svg>
-                  Upload local file
+                  Or upload a local file (JSON, CSV, HTML)
                 </h3>
                 <div 
-                  className={`mt-2 p-4 md:p-6 border-2 border-dashed rounded-lg text-center transition-colors duration-150 cursor-pointer ${
-                    isDragActive 
-                      ? 'border-blue-500 bg-blue-50' 
-                      : 'border-gray-300 hover:border-blue-400 hover:bg-gray-50'
-                  }`}
+                  className={`border-2 border-dashed rounded-lg p-6 text-center ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-400'}`}
                   onDragEnter={handleDragEnter}
                   onDragLeave={handleDragLeave}
                   onDragOver={handleDragOver}
                   onDrop={handleDrop}
-                  onClick={() => document.getElementById('file-upload').click()}
                 >
-                  <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
-                  </svg>
-                  <p className="mt-1 text-sm text-gray-600">
-                    <span className="font-medium text-blue-600 hover:text-blue-500">
-                      Click to upload
-                    </span> or drag and drop
-                  </p>
-                  <p className="mt-1 text-xs text-gray-500">JSON, CSV, HTML, or TXT files (Max 10MB)</p>
-                  {localFile && (
-                    <div className="mt-3 text-sm text-gray-800 bg-blue-50 p-2 rounded flex items-center justify-center">
-                      <svg className="w-4 h-4 mr-1 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                      </svg>
-                      {localFile.name}
-                    </div>
-                  )}
                   <input
-                    id="file-upload"
-                    name="file-upload"
                     type="file"
-                    className="sr-only"
+                    id="file-upload"
+                    className="hidden"
+                    accept=".json,.csv,.html,.htm,.xml,.txt"
                     onChange={handleFileInput}
-                    accept=".json,.csv,.html,.htm,.txt,.xml"
                   />
+                  <label htmlFor="file-upload" className="cursor-pointer flex flex-col items-center justify-center">
+                    <svg className="w-10 h-10 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                    </svg>
+                    <span className="text-sm text-gray-600">
+                      {isDragActive ? "Drop your file here" : localFile ? `File selected: ${localFile.name}` : "Drag and drop your file here, or click to browse"}
+                    </span>
+                  </label>
                 </div>
               </div>
+              
+              {/* Error messages */}
+              {error && (
+                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded">
+                  <div className="flex">
+                    <div className="flex-shrink-0">
+                      <svg className="h-5 w-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                    </div>
+                    <div className="ml-3">
+                      <p className="text-sm text-red-700">{error}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              {/* Export button */}
+              {data.length > 0 && (
+                <div className="flex justify-end mt-4">
+                  <button
+                    onClick={exportToCSV}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition flex items-center"
+                  >
+                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0l-4 4m4-4v12"></path>
+                    </svg>
+                    Export to CSV
+                  </button>
+                </div>
+              )}
             </div>
           </section>
           
-          {/* Error Message */}
-          {error && (
-            <div className="rounded-lg bg-red-50 border-l-4 border-red-500 px-4 py-3 shadow-md transition-all duration-150 opacity-100">
-              <div className="flex items-start">
-                <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                  </svg>
-                </div>
-                <div className="ml-3">
-                  <h3 className="text-sm font-medium text-red-800">Error</h3>
-                  <div className="mt-1 text-sm text-red-700">
-                    {error}
-                  </div>
-                </div>
-                <button 
-                  className="ml-auto flex-shrink-0 text-red-500 hover:text-red-700 focus:outline-none"
-                  onClick={() => setError(null)}
-                >
-                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-                  </svg>
-                </button>
-              </div>
-            </div>
-          )}
-          
-          {/* Data Preview */}
+          {/* Data Display Section */}
           {data.length > 0 && (
-            <section className="bg-white rounded-xl md:rounded-2xl shadow-lg md:shadow-xl overflow-hidden transition-all duration-150 opacity-100 transform translate-y-0">
-              <div className="bg-gradient-to-r from-green-600 to-emerald-600 px-4 md:px-6 py-4 md:py-5 flex justify-between items-center flex-wrap md:flex-nowrap gap-2">
+            <section className="bg-white rounded-xl shadow-lg overflow-hidden">
+              <div className="bg-gradient-to-r from-green-600 to-emerald-700 px-4 md:px-6 py-4 md:py-5">
                 <h2 className="text-white text-lg md:text-xl font-bold flex items-center">
                   <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
                   </svg>
                   Data Preview
                 </h2>
-                <button 
-                  onClick={exportToCSV} 
-                  className="flex items-center py-1.5 px-4 bg-white rounded-full text-emerald-700 font-medium shadow hover:bg-emerald-50 transition-all duration-150 transform hover:scale-105 active:scale-100"
-                >
-                  <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"></path>
-                  </svg>
-                  Export to CSV
-                </button>
               </div>
-              
-              <div className="p-4 md:p-6">
-                <div className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-100">
-                        <tr>
-                          {Object.keys(data[0]).map((key) => (
-                            <th 
-                              key={key} 
-                              scope="col" 
-                              className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider"
-                            >
-                              {key}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {data.slice(0, 10).map((item, index) => (
-                          <tr 
-                            key={index} 
-                            className={`hover:bg-blue-50 transition-colors duration-150 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}
-                          >
-                            {Object.values(item).map((value, i) => (
-                              <td 
-                                key={i} 
-                                className="px-4 md:px-6 py-4 text-sm text-gray-700 font-mono whitespace-nowrap"
-                              >
-                                {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                              </td>
-                            ))}
-                          </tr>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      {data[0] && Object.keys(data[0]).map((header, index) => (
+                        <th key={index} scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          {header}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {data.slice(0, 10).map((row, rowIndex) => (
+                      <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        {Object.values(row).map((cell, cellIndex) => (
+                          <td key={cellIndex} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {typeof cell === 'object' ? JSON.stringify(cell) : String(cell)}
+                          </td>
                         ))}
-                      </tbody>
-                    </table>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {data.length > 10 && (
+                  <div className="bg-gray-50 px-6 py-3 text-center">
+                    <span className="text-sm text-gray-500">
+                      Showing 10 of {data.length} rows. Export to CSV to see all data.
+                    </span>
                   </div>
-                  
-                  {data.length > 10 && (
-                    <div className="text-center py-3 bg-gray-50 border-t border-gray-200">
-                      <div className="flex items-center justify-center text-sm text-gray-500">
-                        <svg className="w-4 h-4 mr-1 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                        </svg>
-                        Showing 10 of {data.length} rows
-                        <button 
-                          onClick={exportToCSV}
-                          className="ml-2 text-blue-600 hover:text-blue-800 hover:underline focus:outline-none font-medium"
-                        >
-                          Export all to CSV
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
             </section>
           )}
         </main>
-        
-        {/* Footer */}
-        <footer className="mt-8 md:mt-12 text-center text-gray-500 text-sm">
-          <p>© {new Date().getFullYear()} Data Fetcher & CSV Exporter. All rights reserved.</p>
-        </footer>
       </div>
     </div>
   );
