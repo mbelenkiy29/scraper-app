@@ -1,619 +1,580 @@
 import React, { useState } from 'react';
-import './App.css';
 
 function App() {
   const [url, setUrl] = useState('');
-  const [metadata, setMetadata] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [localFile, setLocalFile] = useState(null);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const [fetchOptions, setFetchOptions] = useState({
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    mode: 'cors'
+  });
+  const [useProxy, setUseProxy] = useState(false);
 
-  const handleInputChange = (e) => {
+  // Handle URL input change
+  const handleUrlChange = (e) => {
     setUrl(e.target.value);
   };
 
-  const fetchMetadata = async () => {
-    // Reset states
-    setLoading(true);
-    setError(null);
-    setMetadata(null);
-    
+  // Toggle proxy usage
+  const toggleProxy = () => {
+    setUseProxy(!useProxy);
+  };
+
+  // Update fetch options
+  const updateFetchOption = (key, value) => {
+    setFetchOptions(prev => ({
+      ...prev,
+      [key]: value
+    }));
+  };
+
+  // Validate URL
+  const isValidUrl = (urlString) => {
     try {
-      // In a real app, you would need a proxy server or API 
-      // to fetch the metadata due to CORS restrictions
-      // This is a simplified example to demonstrate the concept
-      const response = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`);
+      new URL(urlString);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  // Fetch data from the provided URL
+  const fetchData = async () => {
+    if (!url) {
+      setError('Please enter a URL');
+      return;
+    }
+
+    if (!isValidUrl(url)) {
+      setError('Please enter a valid URL (e.g., https://api.example.com/data)');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // If proxy is enabled, use a CORS proxy
+      const targetUrl = useProxy ? `https://cors-anywhere.herokuapp.com/${url}` : url;
+      
+      // Attempt to fetch with current options
+      let response = await fetch(targetUrl, fetchOptions);
       
       if (!response.ok) {
-        throw new Error('Failed to fetch website data');
+        throw new Error(`HTTP error! Status: ${response.status}`);
       }
       
-      const data = await response.json();
+      // Try to parse as JSON
+      let jsonData;
+      const contentType = response.headers.get('content-type');
       
-      // Create a DOM parser to extract metadata
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(data.contents, 'text/html');
+      if (contentType && contentType.includes('application/json')) {
+        jsonData = await response.json();
+      } else {
+        // If not JSON, try to get text and parse
+        const text = await response.text();
+        try {
+          jsonData = JSON.parse(text);
+        } catch (e) {
+          // If text can't be parsed as JSON, try to extract data from HTML
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(text, 'text/html');
+          
+          // Extract data from tables if present
+          const tables = doc.querySelectorAll('table');
+          if (tables.length > 0) {
+            jsonData = extractDataFromTables(tables);
+          } else {
+            throw new Error('Response is not in JSON format and no tables found');
+          }
+        }
+      }
       
-      // Extract additional metadata
-      const metadataObj = {
-        title: doc.querySelector('title')?.textContent || 'No title found',
-        description: doc.querySelector('meta[name="description"]')?.getAttribute('content') || 'No description found',
-        ogTitle: doc.querySelector('meta[property="og:title"]')?.getAttribute('content') || 'No Open Graph title found',
-        ogDescription: doc.querySelector('meta[property="og:description"]')?.getAttribute('content') || 'No Open Graph description found',
-        ogImage: doc.querySelector('meta[property="og:image"]')?.getAttribute('content') || null,
-        favicon: doc.querySelector('link[rel="icon"]')?.getAttribute('href') || 
-                doc.querySelector('link[rel="shortcut icon"]')?.getAttribute('href') || null,
-        author: doc.querySelector('meta[name="author"]')?.getAttribute('content') || null,
-        keywords: doc.querySelector('meta[name="keywords"]')?.getAttribute('content') || null,
-        themeColor: doc.querySelector('meta[name="theme-color"]')?.getAttribute('content') || null
-      };
-      
-      setMetadata(metadataObj);
+      // Set the data
+      setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
+      setIsLoading(false);
     } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+      setError(`Failed to fetch data: ${err.message}. Try enabling CORS proxy or checking the URL.`);
+      setIsLoading(false);
     }
   };
 
-  const handleSubmit = (e) => {
+  // Extract data from HTML tables
+  const extractDataFromTables = (tables) => {
+    const result = [];
+    
+    // Process the first table
+    const table = tables[0];
+    const headers = Array.from(table.querySelectorAll('th')).map(th => th.textContent.trim());
+    
+    // If no headers found, try first row
+    const headerRow = headers.length === 0 ? Array.from(table.querySelectorAll('tr')[0].querySelectorAll('td')).map(td => td.textContent.trim()) : headers;
+    
+    // Process rows
+    const rows = Array.from(table.querySelectorAll('tr')).slice(headers.length === 0 ? 1 : 0);
+    
+    rows.forEach(row => {
+      const cells = Array.from(row.querySelectorAll('td'));
+      if (cells.length > 0) {
+        const rowData = {};
+        cells.forEach((cell, i) => {
+          if (i < headerRow.length) {
+            rowData[headerRow[i] || `column${i}`] = cell.textContent.trim();
+          }
+        });
+        result.push(rowData);
+      }
+    });
+    
+    return result;
+  };
+
+  // Handle drag events
+  const handleDragEnter = (e) => {
     e.preventDefault();
-    if (url) {
-      fetchMetadata();
+    e.stopPropagation();
+    setIsDragActive(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragActive(false);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragActive(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileInput({ target: { files: e.dataTransfer.files } });
     }
   };
 
-  // Function to extract domain from URL for display
-  const extractDomain = (url) => {
-    try {
-      const domain = new URL(url).hostname;
-      return domain;
-    } catch {
-      return url;
+  // Handle local file input
+  const handleFileInput = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setLocalFile(file);
+      readLocalFile(file);
     }
   };
 
-  // Add these styles in App.css or import them directly
-  const styles = {
-    app: {
-      display: 'flex',
-      flexDirection: 'column',
-      minHeight: '100vh',
-      fontFamily: 'Arial, sans-serif',
-      background: 'linear-gradient(to bottom, #f7f9fc, #e3e8f0)'
-    },
-    header: {
-      background: '#4f46e5',
-      color: 'white',
-      padding: '20px',
-      boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
-    },
-    headerContent: {
-      maxWidth: '1000px',
-      margin: '0 auto',
-      display: 'flex',
-      alignItems: 'center'
-    },
-    logoContainer: {
-      width: '36px',
-      height: '36px',
-      marginRight: '12px',
-      background: 'rgba(255,255,255,0.2)',
-      borderRadius: '50%',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center'
-    },
-    logo: {
-      color: 'white'
-    },
-    appTitle: {
-      fontSize: '24px',
-      fontWeight: 'bold',
-      letterSpacing: '-0.5px',
-      margin: 0
-    },
-    main: {
-      flexGrow: 1,
-      padding: '48px 16px',
-    },
-    container: {
-      maxWidth: '1000px',
-      margin: '0 auto'
-    },
-    intro: {
-      textAlign: 'center',
-      marginBottom: '40px'
-    },
-    introTitle: {
-      fontSize: '32px',
-      fontWeight: 'bold',
-      color: '#1a202c',
-      marginBottom: '12px'
-    },
-    introText: {
-      color: '#4a5568',
-      maxWidth: '600px',
-      margin: '0 auto'
-    },
-    formContainer: {
-      background: 'white',
-      borderRadius: '12px',
-      boxShadow: '0 10px 25px rgba(0,0,0,0.05)',
-      padding: '24px',
-      marginBottom: '32px',
-      transition: 'all 0.3s ease',
-    },
-    form: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '12px'
-    },
-    inputContainer: {
-      position: 'relative',
-      flexGrow: 1
-    },
-    inputIcon: {
-      position: 'absolute',
-      left: '12px',
-      top: '50%',
-      transform: 'translateY(-50%)',
-      color: '#a0aec0',
-      pointerEvents: 'none'
-    },
-    input: {
-      width: '100%',
-      padding: '16px 16px 16px 40px',
-      border: 'none',
-      borderRadius: '8px',
-      background: '#f7fafc',
-      fontSize: '16px',
-      transition: 'all 0.2s',
-    },
-    submitBtn: {
-      background: '#4f46e5',
-      color: 'white',
-      padding: '16px 24px',
-      border: 'none',
-      borderRadius: '8px',
-      fontWeight: '500',
-      fontSize: '16px',
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: '8px',
-      transition: 'all 0.2s',
-    },
-    errorContainer: {
-      background: 'white',
-      borderLeft: '4px solid #e53e3e',
-      borderRadius: '8px',
-      boxShadow: '0 4px 6px rgba(0,0,0,0.05)',
-      padding: '20px',
-      marginBottom: '32px',
-      display: 'flex',
-      alignItems: 'flex-start'
-    },
-    errorIcon: {
-      color: '#e53e3e',
-      marginRight: '12px',
-      marginTop: '2px',
-      flexShrink: 0
-    },
-    errorMessage: {
-      color: '#1a202c',
-      fontWeight: '500',
-      marginBottom: '4px'
-    },
-    errorHelp: {
-      color: '#4a5568',
-      fontSize: '14px'
-    },
-    loaderContainer: {
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center',
-      padding: '64px 0'
-    },
-    loader: {
-      width: '64px',
-      height: '64px',
-      border: '4px solid rgba(79, 70, 229, 0.1)',
-      borderTopColor: '#4f46e5',
-      borderRadius: '50%',
-      animation: 'spin 1s linear infinite'
-    },
-    resultsContainer: {
-      background: 'white',
-      borderRadius: '12px',
-      overflow: 'hidden',
-      boxShadow: '0 10px 25px rgba(0,0,0,0.05)',
-      transition: 'all 0.3s ease'
-    },
-    resultsHeader: {
-      background: '#4f46e5',
-      color: 'white',
-      padding: '24px'
-    },
-    resultsHeaderContent: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between'
-    },
-    resultsDomain: {
-      fontSize: '20px',
-      fontWeight: '600',
-      margin: 0
-    },
-    themeColorContainer: {
-      display: 'flex',
-      alignItems: 'center'
-    },
-    themeColorSwatch: {
-      width: '16px',
-      height: '16px',
-      borderRadius: '50%',
-      marginRight: '8px'
-    },
-    themeColorText: {
-      fontSize: '12px',
-      opacity: '0.9'
-    },
-    resultsBody: {
-      padding: '24px'
-    },
-    resultsGrid: {
-      display: 'grid',
-      gridTemplateColumns: '1fr',
-      gap: '32px'
-    },
-    metadataGroup: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '24px'
-    },
-    metadataCard: {
-      background: '#f7fafc',
-      padding: '16px',
-      borderRadius: '8px'
-    },
-    metadataTitle: {
-      fontSize: '12px',
-      textTransform: 'uppercase',
-      color: '#718096',
-      fontWeight: '600',
-      marginBottom: '8px'
-    },
-    metadataContent: {
-      color: '#1a202c'
-    },
-    keywordTags: {
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: '8px'
-    },
-    keywordTag: {
-      background: '#ebf4ff',
-      color: '#3182ce',
-      fontSize: '12px',
-      padding: '4px 8px',
-      borderRadius: '4px'
-    },
-    imageContainer: {
-      background: '#f7fafc',
-      padding: '16px',
-      borderRadius: '8px',
-      marginBottom: '24px'
-    },
-    ogImage: {
-      position: 'relative',
-      overflow: 'hidden',
-      borderRadius: '8px',
-      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-      background: '#e2e8f0',
-      aspectRatio: '16/9'
-    },
-    imageUrl: {
-      marginTop: '12px',
-      color: '#718096',
-      fontSize: '12px',
-      overflowWrap: 'break-word',
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis'
-    },
-    faviconContainer: {
-      background: '#f7fafc',
-      padding: '16px',
-      borderRadius: '8px'
-    },
-    faviconWrapper: {
-      display: 'flex',
-      alignItems: 'center'
-    },
-    faviconBox: {
-      background: 'white',
-      padding: '12px',
-      borderRadius: '8px',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-      border: '1px solid #e2e8f0'
-    },
-    faviconUrl: {
-      marginLeft: '16px',
-      color: '#718096',
-      fontSize: '12px',
-      maxWidth: '300px',
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis'
-    },
-    resultsFooter: {
-      borderTop: '1px solid #e2e8f0',
-      padding: '16px',
-      background: '#f7fafc'
-    },
-    websiteLink: {
-      color: '#4f46e5',
-      fontWeight: '500',
-      textDecoration: 'none',
-      display: 'flex',
-      alignItems: 'center',
-      transition: 'color 0.2s'
-    },
-    footer: {
-      background: '#1a202c',
-      color: '#a0aec0',
-      padding: '32px 16px'
-    },
-    footerContent: {
-      maxWidth: '1000px',
-      margin: '0 auto',
-      textAlign: 'center'
-    },
-    footerLogo: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginBottom: '16px'
-    },
-    footerAppName: {
-      fontWeight: '500',
-      color: 'white',
-      marginLeft: '8px'
-    },
-    footerText: {
-      fontSize: '14px'
-    },
-    '@keyframes spin': {
-      '0%': { transform: 'rotate(0deg)' },
-      '100%': { transform: 'rotate(360deg)' }
+  // Read local file content
+  const readLocalFile = (file) => {
+    const reader = new FileReader();
+    
+    reader.onload = (event) => {
+      try {
+        const jsonData = JSON.parse(event.target.result);
+        setData(Array.isArray(jsonData) ? jsonData : [jsonData]);
+        setError(null);
+      } catch (err) {
+        // Try to parse CSV if JSON fails
+        try {
+          const csvData = parseCSV(event.target.result);
+          setData(csvData);
+          setError(null);
+        } catch (csvErr) {
+          setError('Invalid file format. Please upload a valid JSON or CSV file.');
+        }
+      }
+    };
+    
+    reader.onerror = () => {
+      setError('Error reading file');
+    };
+    
+    reader.readAsText(file);
+  };
+
+  // Parse CSV string to JSON
+  const parseCSV = (csvString) => {
+    const lines = csvString.split('\n');
+    const result = [];
+    const headers = lines[0].split(',').map(header => header.trim().replace(/^"|"$/g, ''));
+    
+    for (let i = 1; i < lines.length; i++) {
+      if (!lines[i].trim()) continue;
+      
+      const obj = {};
+      const currentLine = lines[i].split(',');
+      
+      for (let j = 0; j < headers.length; j++) {
+        obj[headers[j]] = currentLine[j] ? currentLine[j].trim().replace(/^"|"$/g, '') : '';
+      }
+      
+      result.push(obj);
     }
+    
+    return result;
+  };
+
+  // Convert data to CSV
+  const convertToCSV = (data) => {
+    if (data.length === 0) return '';
+    
+    // Get headers from the first object
+    const headers = Object.keys(data[0]);
+    
+    // Create CSV header row
+    const csvRows = [headers.join(',')];
+    
+    // Create rows for each data item
+    for (const row of data) {
+      const values = headers.map(header => {
+        const value = row[header];
+        // Handle values that contain commas, newlines, or quotes
+        const escaped = typeof value === 'string' ? 
+          `"${value.replace(/"/g, '""')}"` : 
+          value;
+        return escaped;
+      });
+      csvRows.push(values.join(','));
+    }
+    
+    return csvRows.join('\n');
+  };
+
+  // Export data to CSV
+  const exportToCSV = () => {
+    if (data.length === 0) {
+      setError('No data to export');
+      return;
+    }
+    
+    const csv = convertToCSV(data);
+    
+    // Create a Blob from the CSV string
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    
+    // Create a download link and trigger download
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'exported_data.csv');
+    link.style.visibility = 'hidden';
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
-    <div style={styles.app}>
-      <header style={styles.header}>
-        <div style={styles.headerContent}>
-          <div style={styles.logoContainer}>
-            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={styles.logo}>
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="2" y1="12" x2="22" y2="12"></line>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-            </svg>
-          </div>
-          <h1 style={styles.appTitle}>MetaSnap</h1>
-        </div>
-      </header>
-      
-      <main style={styles.main}>
-        <div style={styles.container}>
-          <div style={styles.intro}>
-            <h2 style={styles.introTitle}>Extract Website Metadata</h2>
-            <p style={styles.introText}>Instantly fetch and display metadata from any website by entering the URL below</p>
-          </div>
-          
-          <div style={styles.formContainer}>
-            <form onSubmit={handleSubmit} style={styles.form}>
-              <div style={{display: 'flex', flexDirection: window.innerWidth > 768 ? 'row' : 'column', gap: '12px'}}>
-                <div style={styles.inputContainer}>
-                  <div style={styles.inputIcon}>
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none">
-                      <circle cx="12" cy="12" r="10"></circle>
-                      <line x1="2" y1="12" x2="22" y2="12"></line>
-                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-                    </svg>
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-blue-50 p-4 md:p-6 font-sans text-gray-800">
+      <div className="max-w-5xl mx-auto">
+        {/* Header Section */}
+        <header className="text-center mb-8 md:mb-12">
+          <h1 className="text-3xl md:text-4xl lg:text-5xl font-extrabold mb-2 bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
+            Data Fetcher & CSV Exporter
+          </h1>
+          <p className="text-gray-600 max-w-2xl mx-auto text-base md:text-lg">
+            A modern tool to fetch data from APIs and local files, with quick export to CSV functionality
+          </p>
+        </header>
+
+        {/* Main Content */}
+        <main className="space-y-6 md:space-y-8">
+          {/* Controls Card */}
+          <section className="bg-white rounded-xl md:rounded-2xl shadow-lg md:shadow-xl overflow-hidden">
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-700 px-4 md:px-6 py-4 md:py-5">
+              <h2 className="text-white text-lg md:text-xl font-bold flex items-center">
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16m-7 6h7"></path>
+                </svg>
+                Data Source
+              </h2>
+            </div>
+            
+            <div className="p-4 md:p-6 space-y-6 md:space-y-8">
+              {/* URL Input Section */}
+              <div>
+                <h3 className="text-base md:text-lg font-semibold text-gray-800 mb-2 md:mb-3 flex items-center">
+                  <svg className="w-5 h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
+                  </svg>
+                  Fetch data from URL
+                </h3>
+                <div className="flex flex-col md:flex-row gap-3">
+                  <div className="flex-grow relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path>
+                      </svg>
+                    </div>
+                    <input
+                      type="text"
+                      value={url}
+                      onChange={handleUrlChange}
+                      placeholder="Enter API endpoint URL (e.g., https://api.example.com/data)"
+                      className="pl-10 w-full rounded-lg border border-gray-300 bg-gray-50 py-3 px-4 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent shadow-sm transition-all duration-150"
+                    />
                   </div>
+                  <button 
+                    onClick={fetchData} 
+                    disabled={isLoading} 
+                    className={`py-3 px-6 md:w-auto rounded-lg text-white font-medium text-center shadow-md transition-all duration-150 transform hover:scale-105 active:scale-100 flex items-center justify-center ${
+                      isLoading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
+                    }`}
+                  >
+                    {isLoading ? (
+                      <>
+                        <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Loading...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                        </svg>
+                        Fetch Data
+                      </>
+                    )}
+                  </button>
+                </div>
+                
+                {/* Advanced options toggle */}
+                <div className="mt-3">
+                  <details className="text-sm">
+                    <summary className="cursor-pointer text-blue-600 hover:text-blue-800 font-medium">
+                      Advanced Options
+                    </summary>
+                    <div className="mt-3 p-3 bg-gray-50 rounded-lg space-y-3">
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          id="use-proxy"
+                          checked={useProxy}
+                          onChange={toggleProxy}
+                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        />
+                        <label htmlFor="use-proxy" className="ml-2 block text-sm text-gray-700">
+                          Use CORS Proxy (for cross-origin issues)
+                        </label>
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm text-gray-700 mb-1">
+                          Request Method
+                        </label>
+                        <select
+                          value={fetchOptions.method}
+                          onChange={(e) => updateFetchOption('method', e.target.value)}
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm bg-white py-2 px-3"
+                        >
+                          <option value="GET">GET</option>
+                          <option value="POST">POST</option>
+                          <option value="PUT">PUT</option>
+                          <option value="DELETE">DELETE</option>
+                        </select>
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm text-gray-700 mb-1">
+                          Content-Type Header
+                        </label>
+                        <select
+                          value={fetchOptions.headers['Content-Type']}
+                          onChange={(e) => updateFetchOption('headers', {...fetchOptions.headers, 'Content-Type': e.target.value})}
+                          className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm bg-white py-2 px-3"
+                        >
+                          <option value="application/json">application/json</option>
+                          <option value="text/html">text/html</option>
+                          <option value="text/plain">text/plain</option>
+                          <option value="application/xml">application/xml</option>
+                        </select>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              </div>
+              
+              {/* Divider */}
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-gray-200"></div>
+                </div>
+                <div className="relative flex justify-center">
+                  <span className="bg-white px-4 text-sm text-gray-500 font-medium">OR</span>
+                </div>
+              </div>
+              
+              {/* File Upload Section */}
+              <div>
+                <h3 className="text-base md:text-lg font-semibold text-gray-800 mb-2 md:mb-3 flex items-center">
+                  <svg className="w-5 h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                  </svg>
+                  Upload local file
+                </h3>
+                <div 
+                  className={`mt-2 p-4 md:p-6 border-2 border-dashed rounded-lg text-center transition-colors duration-150 cursor-pointer ${
+                    isDragActive 
+                      ? 'border-blue-500 bg-blue-50' 
+                      : 'border-gray-300 hover:border-blue-400 hover:bg-gray-50'
+                  }`}
+                  onDragEnter={handleDragEnter}
+                  onDragLeave={handleDragLeave}
+                  onDragOver={handleDragOver}
+                  onDrop={handleDrop}
+                  onClick={() => document.getElementById('file-upload').click()}
+                >
+                  <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                  </svg>
+                  <p className="mt-1 text-sm text-gray-600">
+                    <span className="font-medium text-blue-600 hover:text-blue-500">
+                      Click to upload
+                    </span> or drag and drop
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500">JSON or CSV files (Max 10MB)</p>
+                  {localFile && (
+                    <div className="mt-3 text-sm text-gray-800 bg-blue-50 p-2 rounded flex items-center justify-center">
+                      <svg className="w-4 h-4 mr-1 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                      </svg>
+                      {localFile.name}
+                    </div>
+                  )}
                   <input
-                    type="text"
-                    placeholder="Enter website URL (e.g. https://example.com)"
-                    value={url}
-                    onChange={handleInputChange}
-                    style={styles.input}
-                    required
+                    id="file-upload"
+                    name="file-upload"
+                    type="file"
+                    className="sr-only"
+                    onChange={handleFileInput}
+                    accept=".json,.csv"
                   />
                 </div>
+              </div>
+            </div>
+          </section>
+          
+          {/* Error Message */}
+          {error && (
+            <div className="rounded-lg bg-red-50 border-l-4 border-red-500 px-4 py-3 shadow-md transition-all duration-150 opacity-100">
+              <div className="flex items-start">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-red-800">Error</h3>
+                  <div className="mt-1 text-sm text-red-700">
+                    {error}
+                  </div>
+                </div>
                 <button 
-                  type="submit" 
-                  style={{...styles.submitBtn, 
-                    opacity: loading ? 0.7 : 1,
-                    cursor: loading ? 'not-allowed' : 'pointer'
-                  }}
-                  disabled={loading}
+                  className="ml-auto flex-shrink-0 text-red-500 hover:text-red-700 focus:outline-none"
+                  onClick={() => setError(null)}
                 >
-                  {loading ? (
-                    <>
-                      <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" 
-                        style={{animation: 'spin 1s linear infinite'}}>
-                        <circle cx="12" cy="12" r="10" strokeOpacity="0.25"></circle>
-                        <path d="M12 2a10 10 0 0 1 10 10"></path>
-                      </svg>
-                      <span>Fetching...</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none">
-                        <circle cx="11" cy="11" r="8"></circle>
-                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                      </svg>
-                      <span>Fetch Metadata</span>
-                    </>
-                  )}
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
+                  </svg>
                 </button>
               </div>
-            </form>
-          </div>
+            </div>
+          )}
           
-          {error && (
-            <div style={styles.errorContainer}>
-              <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" style={styles.errorIcon}>
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="12" y1="8" x2="12" y2="12"></line>
-                <line x1="12" y1="16" x2="12.01" y2="16"></line>
-              </svg>
-              <div>
-                <p style={styles.errorMessage}>{error}</p>
-                <p style={styles.errorHelp}>Make sure the URL is correct and includes the protocol (http:// or https://)</p>
+          {/* Data Preview */}
+          {data.length > 0 && (
+            <section className="bg-white rounded-xl md:rounded-2xl shadow-lg md:shadow-xl overflow-hidden transition-all duration-150 opacity-100 transform translate-y-0">
+              <div className="bg-gradient-to-r from-green-600 to-emerald-600 px-4 md:px-6 py-4 md:py-5 flex justify-between items-center flex-wrap md:flex-nowrap gap-2">
+                <h2 className="text-white text-lg md:text-xl font-bold flex items-center">
+                  <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                  </svg>
+                  Data Preview
+                </h2>
+                <button 
+                  onClick={exportToCSV} 
+                  className="flex items-center py-1.5 px-4 bg-white rounded-full text-emerald-700 font-medium shadow hover:bg-emerald-50 transition-all duration-150 transform hover:scale-105 active:scale-100"
+                >
+                  <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"></path>
+                  </svg>
+                  Export to CSV
+                </button>
               </div>
-            </div>
-          )}
-          
-          {loading && (
-            <div style={styles.loaderContainer}>
-              <div style={styles.loader}></div>
-            </div>
-          )}
-          
-          {metadata && (
-            <div style={styles.resultsContainer}>
-              <div style={styles.resultsHeader}>
-                <div style={styles.resultsHeaderContent}>
-                  <h2 style={styles.resultsDomain}>Metadata for {extractDomain(url)}</h2>
-                  {metadata.themeColor && (
-                    <div style={styles.themeColorContainer}>
-                      <div style={{...styles.themeColorSwatch, backgroundColor: metadata.themeColor}}></div>
-                      <span style={styles.themeColorText}>Theme Color: {metadata.themeColor}</span>
+              
+              <div className="p-4 md:p-6">
+                <div className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          {Object.keys(data[0]).map((key) => (
+                            <th 
+                              key={key} 
+                              scope="col" 
+                              className="px-4 md:px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider"
+                            >
+                              {key}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {data.slice(0, 10).map((item, index) => (
+                          <tr 
+                            key={index} 
+                            className={`hover:bg-blue-50 transition-colors duration-150 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}
+                          >
+                            {Object.values(item).map((value, i) => (
+                              <td 
+                                key={i} 
+                                className="px-4 md:px-6 py-4 text-sm text-gray-700 font-mono whitespace-nowrap"
+                              >
+                                {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  
+                  {data.length > 10 && (
+                    <div className="text-center py-3 bg-gray-50 border-t border-gray-200">
+                      <div className="flex items-center justify-center text-sm text-gray-500">
+                        <svg className="w-4 h-4 mr-1 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Showing 10 of {data.length} rows
+                        <button 
+                          onClick={exportToCSV}
+                          className="ml-2 text-blue-600 hover:text-blue-800 hover:underline focus:outline-none font-medium"
+                        >
+                          Export all to CSV
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
-              
-              <div style={styles.resultsBody}>
-                <div style={styles.resultsGrid}>
-                  <div style={styles.metadataGroup}>
-                    <div style={styles.metadataCard}>
-                      <h3 style={styles.metadataTitle}>Page Title</h3>
-                      <p style={styles.metadataContent}>{metadata.title}</p>
-                    </div>
-                    
-                    <div style={styles.metadataCard}>
-                      <h3 style={styles.metadataTitle}>Meta Description</h3>
-                      <p style={styles.metadataContent}>{metadata.description}</p>
-                    </div>
-                    
-                    <div style={styles.metadataCard}>
-                      <h3 style={styles.metadataTitle}>Open Graph Title</h3>
-                      <p style={styles.metadataContent}>{metadata.ogTitle}</p>
-                    </div>
-                    
-                    <div style={styles.metadataCard}>
-                      <h3 style={styles.metadataTitle}>Open Graph Description</h3>
-                      <p style={styles.metadataContent}>{metadata.ogDescription}</p>
-                    </div>
-                    
-                    {metadata.author && (
-                      <div style={styles.metadataCard}>
-                        <h3 style={styles.metadataTitle}>Author</h3>
-                        <p style={styles.metadataContent}>{metadata.author}</p>
-                      </div>
-                    )}
-                    
-                    {metadata.keywords && (
-                      <div style={styles.metadataCard}>
-                        <h3 style={styles.metadataTitle}>Keywords</h3>
-                        <div style={styles.keywordTags}>
-                          {metadata.keywords.split(',').map((keyword, index) => (
-                            <span key={index} style={styles.keywordTag}>
-                              {keyword.trim()}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  
-                  <div style={styles.metadataGroup}>
-                    {metadata.ogImage && (
-                      <div style={styles.imageContainer}>
-                        <h3 style={styles.metadataTitle}>Open Graph Image</h3>
-                        <div style={styles.ogImage}>
-                          <img 
-                            src={metadata.ogImage} 
-                            alt="OG Image"
-                            style={{width: '100%', height: '100%', objectFit: 'cover'}}
-                            onError={(e) => {
-                              e.target.onerror = null;
-                              e.target.src = "/api/placeholder/400/320";
-                            }}
-                          />
-                        </div>
-                        <p style={styles.imageUrl}>{metadata.ogImage}</p>
-                      </div>
-                    )}
-                    
-                    {metadata.favicon && (
-                      <div style={styles.faviconContainer}>
-                        <h3 style={styles.metadataTitle}>Favicon</h3>
-                        <div style={styles.faviconWrapper}>
-                          <div style={styles.faviconBox}>
-                            <img 
-                              src={metadata.favicon.startsWith('http') ? metadata.favicon : `${new URL(url).origin}${metadata.favicon}`} 
-                              alt="Favicon" 
-                              style={{height: '40px', width: '40px', objectFit: 'contain'}}
-                              onError={(e) => {
-                                e.target.onerror = null;
-                                e.target.src = "/api/placeholder/32/32";
-                              }}
-                            />
-                          </div>
-                          <div style={styles.faviconUrl}>{metadata.favicon}</div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              
-              <div style={styles.resultsFooter}>
-                <a 
-                  href={url} 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  style={styles.websiteLink}
-                >
-                  Visit website
-                  <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" style={{marginLeft: '4px'}}>
-                    <polyline points="9 18 15 12 9 6"></polyline>
-                  </svg>
-                </a>
-              </div>
-            </div>
+            </section>
           )}
-        </div>
-      </main>
-      
-      <footer style={styles.footer}>
-        <div style={styles.footerContent}>
-          <div style={styles.footerLogo}>
-            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" style={{color: '#a0aec0'}}>
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="2" y1="12" x2="22" y2="12"></line>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-            </svg>
-            <span style={styles.footerAppName}>MetaSnap</span>
-          </div>
-          <p style={styles.footerText}>A modern tool for extracting and viewing website metadata</p>
-        </div>
-      </footer>
+        </main>
+        
+        {/* Footer */}
+        <footer className="mt-8 md:mt-12 text-center text-gray-500 text-sm">
+          <p>© {new Date().getFullYear()} Data Fetcher & CSV Exporter. All rights reserved.</p>
+        </footer>
+      </div>
     </div>
   );
 }
