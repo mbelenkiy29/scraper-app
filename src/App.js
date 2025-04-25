@@ -18,7 +18,8 @@ function App() {
   const proxyUrls = [
     `https://corsproxy.io/?`,
     `https://api.allorigins.win/raw?url=`,
-    `https://cors-anywhere.herokuapp.com/`
+    `https://cors-anywhere.herokuapp.com/`,
+    `https://api.codetabs.com/v1/proxy?quest=`
   ];
 
   // Handle URL input change
