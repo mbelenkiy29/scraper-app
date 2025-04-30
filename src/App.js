@@ -1,16 +1,4 @@
 import React, { useState } from 'react';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import {
-  faLink,
-  faDownload,
-  faUpload,
-  faBars,
-  faSpinner,
-  faFileExport,
-  faExclamationTriangle,
-  faGlobe,
-  faTable
-} from '@fortawesome/free-solid-svg-icons';
 
 function App() {
   const [url, setUrl] = useState('');
