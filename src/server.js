@@ -1,31 +1,55 @@
 const express = require('express');
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 const cors = require('cors');
 const fs = require('fs');
+const path = require('path');
 const app = express();
 const PORT = 5001;
 
 app.use(cors());
 app.use(express.json());
 
-app.post('/api/scrape', (req, res) => {
-  const { url } = req.body;
-  if (!url) return res.status(400).json({ error: 'URL is required' });
+app.get('/api/scrape-stream', (req, res) => {
+  const targetUrl = req.query.url;
+  if (!targetUrl) {
+    res.writeHead(400);
+    res.end();
+    return;
+  }
 
-  const command = `python universal_scraper.py "${url}"`;
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
 
-  exec(command, { timeout: 180000 }, (err) => {
-    if (err) return res.status(500).json({ error: 'Python scraper failed' });
+  const python = spawn('python', ['universal_scraper.py', targetUrl]);
 
-    try {
-      const csvData = fs.readFileSync('./full_site_output.csv', 'utf8');
-      res.type('text/csv').send(csvData);
-    } catch (readErr) {
-      res.status(500).json({ error: 'CSV not found' });
+  python.stdout.on('data', (data) => {
+    const lines = data.toString().split('\n');
+    lines.forEach(line => {
+      if (line.trim()) {
+        res.write(`data: LOG:${line.trim()}\n\n`);
+      }
+    });
+  });
+
+  python.stderr.on('data', (data) => {
+    res.write(`data: ERR:${data.toString().trim()}\n\n`);
+  });
+
+  python.on('close', (code) => {
+    if (fs.existsSync('./full_site_output.csv')) {
+      const csvContent = fs.readFileSync('./full_site_output.csv', 'utf8');
+      const base64 = Buffer.from(csvContent).toString('base64');
+      res.write(`data: CSV:${base64}\n\n`);
+    } else {
+      res.write(`data: ERR:CSV file not found.\n\n`);
     }
+    res.write('event: end\ndata: done\n\n');
+    res.end();
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${5000}`);
+  console.log(`✅ Server running on http://localhost:${3000}`);
 });

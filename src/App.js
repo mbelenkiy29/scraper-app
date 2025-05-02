@@ -1,14 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 function App() {
   const [url, setUrl] = useState('');
   const [data, setData] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const logEndRef = useRef(null);
 
   const handleUrlChange = (e) => {
     setUrl(e.target.value);
   };
+
+  useEffect(() => {
+    if (logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs]);
 
   const isValidUrl = (urlString) => {
     try {
@@ -54,25 +62,42 @@ function App() {
 
     setIsLoading(true);
     setError(null);
+    setLogs([]);
 
-    try {
-      const response = await fetch('http://localhost:5001/api/scrape', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url })
-      });
+    const eventSource = new EventSource(`http://localhost:5001/api/scrape-stream?url=${encodeURIComponent(url)}`);
 
-      if (!response.ok) throw new Error('Backend scraper failed');
+    eventSource.onmessage = (event) => {
+      if (event.data.startsWith('LOG:')) {
+        setLogs(prev => [...prev, event.data.replace('LOG:', '')]);
+      } else if (event.data.startsWith('CSV:')) {
+        const csv = atob(event.data.replace('CSV:', ''));
+        const parsed = parseCSV(csv);
+        setData(parsed);
+        triggerDownload(csv);
+        setIsLoading(false);
+        eventSource.close();
+      } else if (event.data.startsWith('ERR:')) {
+        setError(event.data.replace('ERR:', ''));
+        setIsLoading(false);
+        eventSource.close();
+      }
+    };
 
-      const csvText = await response.text();
-      const csvData = parseCSV(csvText);
-      setData(csvData);
-    } catch (err) {
-      console.error(err);
-      setError(`Failed to fetch: ${err.message}`);
-    } finally {
+    eventSource.onerror = (e) => {
+      setError('Error connecting to scraper backend');
       setIsLoading(false);
-    }
+      eventSource.close();
+    };
+  };
+
+  const triggerDownload = (csvText) => {
+    const blob = new Blob([csvText], { type: 'text/csv' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'scraped_data.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
@@ -104,6 +129,18 @@ function App() {
             </div>
             {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
           </div>
+
+          {logs.length > 0 && (
+            <div className="mb-6 max-h-64 overflow-y-auto bg-gray-100 p-4 rounded text-sm text-gray-700">
+              <strong className="block mb-2">Activity Log:</strong>
+              <div>
+                {logs.map((line, index) => (
+                  <div key={index}>{line}</div>
+                ))}
+                <div ref={logEndRef} />
+              </div>
+            </div>
+          )}
 
           {data.length > 0 && (
             <div className="overflow-x-auto">

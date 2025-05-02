@@ -8,17 +8,18 @@ import sys
 visited = set()
 data_rows = []
 
+def log(msg):
+    print(msg, flush=True)
+
 def extract_data(html, page_url):
     soup = BeautifulSoup(html, 'html.parser')
     results = []
 
-    # Extract text from basic readable elements
     for tag in soup.find_all(['h1', 'h2', 'h3', 'p', 'li', 'span']):
         text = tag.get_text(strip=True)
         if text:
             results.append({'type': 'text', 'content': text, 'source': page_url})
 
-    # Extract tables
     for table in soup.find_all('table'):
         headers = [th.get_text(strip=True) for th in table.find_all('th')]
         for row in table.find_all('tr'):
@@ -29,7 +30,6 @@ def extract_data(html, page_url):
                 row_data['source'] = page_url
                 results.append(row_data)
 
-    # Extract images
     for img in soup.find_all('img'):
         src = img.get('src')
         alt = img.get('alt', '')
@@ -59,14 +59,15 @@ def scrape_site(start_url, max_pages=1000):
             if url in visited:
                 continue
             try:
-                print(f"[+] Visiting: {url}")
-                page.goto(url, timeout=60000, wait_until="domcontentloaded")
+                log(f"[+] Visiting: {url}")
+                page.goto(url, timeout=60000, wait_until='domcontentloaded')
                 time.sleep(1.5)
                 html = page.content()
                 visited.add(url)
 
                 extracted = extract_data(html, url)
                 data_rows.extend(extracted)
+                log(f"[✓] Extracted {len(extracted)} elements from {url}")
 
                 soup = BeautifulSoup(html, 'html.parser')
                 for link_tag in soup.find_all('a', href=True):
@@ -75,31 +76,24 @@ def scrape_site(start_url, max_pages=1000):
                         to_visit.append(full_url)
 
             except Exception as e:
-                print(f"[!] Failed to visit {url}: {e}")
-                continue
+                log(f\"[!] Failed to visit {url}: {e}\")
 
         browser.close()
 
     if not data_rows:
-        print("[-] No data extracted.")
+        log(\"[-] No data extracted.\")
         return
 
-    # Normalize all keys for CSV output
-    keys = set()
-    for row in data_rows:
-        keys.update(row.keys())
-    keys = sorted(list(keys))
-
-    with open("full_site_output.csv", "w", newline="", encoding="utf-8") as f:
+    keys = sorted(set().union(*(row.keys() for row in data_rows)))
+    with open(\"full_site_output.csv\", \"w\", newline=\"\", encoding=\"utf-8\") as f:
         writer = csv.DictWriter(f, fieldnames=keys)
         writer.writeheader()
         writer.writerows(data_rows)
 
-    print(f"[✓] Scraped {len(visited)} pages. Data saved to full_site_output.csv")
+    log(f\"[✓] Scraped {len(visited)} pages. CSV saved as full_site_output.csv\")
 
-# === Run with: python universal_scraper.py https://example.com ===
-if __name__ == "__main__":
+if __name__ == \"__main__\":
     if len(sys.argv) < 2:
-        print("Usage: python universal_scraper.py <url>")
+        log(\"Usage: python universal_scraper.py <url>\")
     else:
         scrape_site(sys.argv[1])
